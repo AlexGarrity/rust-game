@@ -1,0 +1,23 @@
+[package]
+name = "survival-game"
+version = "0.1.0"
+description = "A multiplayer survival sandbox game"
+edition = "2021"
+authors = [ "Alex Garrity" ]
+license = "GPL-3"
+readme = "README.md"
+publish = false
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "common"
+
+[[bin]]
+name = "client"
+
+[[bin]]
+name = "server"
+
+[dependencies]
