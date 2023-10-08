@@ -1,3 +1,9 @@
+# Build directory
 /target
+
+# IDE specific directories
 .idea/
 .vscode/
+
+# Generated SPIR-V files
+*.spv
