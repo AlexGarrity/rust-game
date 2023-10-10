@@ -1,9 +1,9 @@
+use crate::renderer::Renderer;
 use std::ops::Deref;
 use std::path::Path;
 use tracing::debug;
 use winit::event::{Event, WindowEvent};
 use winit::platform::wayland::EventLoopWindowTargetExtWayland;
-use crate::renderer::Renderer;
 
 mod renderer;
 
@@ -16,9 +16,7 @@ fn main() {
         .with_target(true)
         .init();
 
-    let event_loop = winit::event_loop::EventLoopBuilder::new()
-        .build()
-        .unwrap();
+    let event_loop = winit::event_loop::EventLoopBuilder::new().build().unwrap();
 
     let window = winit::window::WindowBuilder::new()
         .with_transparent(false)
@@ -29,8 +27,14 @@ fn main() {
         .unwrap();
 
     let mut renderer = Renderer::new("survival-game", (0, 1, 0), &window);
-    renderer.load_shader(Path::new("res/shaders/basic.vert.spv"), Path::new("res/shaders/basic.frag.spv"), String::from("basic"))
-        .expect("Failed to load basic shader");
+    match renderer.load_shader(
+        Path::new("res/shaders/basic.vert.spv"),
+        Path::new("res/shaders/basic.frag.spv"),
+        String::from("basic"),
+    ) {
+        Err(error) => panic!("Failed to create basic shader pipeline: {}", error),
+        Ok(_) => {}
+    }
 
     let _ = event_loop.run(|event, _window_target, control_flow| {
         control_flow.set_poll();

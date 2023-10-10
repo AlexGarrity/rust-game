@@ -1,9 +1,9 @@
 mod context;
 mod device;
-mod surface;
 mod pipeline;
+mod surface;
 
 pub use context::Context;
 pub use device::Device;
-pub use surface::Surface;
 pub use pipeline::Pipeline;
+pub use surface::Surface;

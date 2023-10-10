@@ -12,7 +12,6 @@ pub struct Context {
 }
 
 impl Context {
-
     /// Constructs a new Context
     ///
     /// # Arguments
@@ -33,8 +32,7 @@ impl Context {
 
         // TODO - See if we can link statically instead
         debug!("Loading Vulkan dynamically");
-        let entry_point = unsafe { ash::Entry::load() }
-            .expect("Failed to load Vulkan libraries");
+        let entry_point = unsafe { ash::Entry::load() }.expect("Failed to load Vulkan libraries");
         debug!("Loaded successfully");
 
         let engine_name = CString::new("engine").unwrap();
@@ -44,7 +42,12 @@ impl Context {
             .engine_name(engine_name.as_ref())
             .application_name(application_name.as_ref())
             .api_version(vk::API_VERSION_1_3)
-            .application_version(vk::make_api_version(0, application_version.0, application_version.1, application_version.2))
+            .application_version(vk::make_api_version(
+                0,
+                application_version.0,
+                application_version.1,
+                application_version.2,
+            ))
             .engine_version(vk::make_api_version(0, 0, 1, 0))
             .build();
 
@@ -57,17 +60,17 @@ impl Context {
             .enabled_extension_names(&[
                 extensions::khr::Surface::name().as_ptr(),
                 #[cfg(target_os = "windows")]
-                    extensions::khr::Win32Surface::name().as_ptr(),
+                extensions::khr::Win32Surface::name().as_ptr(),
                 #[cfg(target_os = "linux")]
-                    extensions::khr::XcbSurface::name().as_ptr(),
+                extensions::khr::XcbSurface::name().as_ptr(),
                 #[cfg(target_os = "linux")]
-                    extensions::khr::WaylandSurface::name().as_ptr(),
+                extensions::khr::WaylandSurface::name().as_ptr(),
                 #[cfg(target_os = "macos")]
-                    extensions::ext::MetalSurface::name().as_ptr()
+                extensions::ext::MetalSurface::name().as_ptr(),
             ])
             .enabled_layer_names(&[
                 #[cfg(debug_assertions)]
-                    validation_layer_name.as_ptr()
+                validation_layer_name.as_ptr(),
             ])
             .build();
 
@@ -91,7 +94,9 @@ impl Drop for Context {
         let _guard = span.enter();
 
         debug!("Destroying instance");
-        unsafe { self.instance.destroy_instance(None); }
+        unsafe {
+            self.instance.destroy_instance(None);
+        }
         debug!("Successfully destroyed instance");
     }
 }

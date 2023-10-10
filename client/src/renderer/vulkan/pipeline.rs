@@ -1,9 +1,9 @@
-use std::ffi::CString;
 use crate::renderer::vulkan::{Device, Surface};
 use ash::vk;
 use byteorder::{LittleEndian, ReadBytesExt};
+use std::ffi::CString;
 use std::rc::{Rc, Weak};
-use tracing::{debug_span, debug, warn};
+use tracing::{debug, debug_span, warn};
 
 pub struct Pipeline {
     device: Weak<ash::Device>,
@@ -12,7 +12,7 @@ pub struct Pipeline {
     pub render_pass: vk::RenderPass,
     pub(crate) pipeline: vk::Pipeline,
     vertex_shader: vk::ShaderModule,
-    fragment_shader: vk::ShaderModule
+    fragment_shader: vk::ShaderModule,
 }
 
 impl Pipeline {
@@ -47,8 +47,10 @@ impl Pipeline {
         vertex_shader_path: &std::path::Path,
         fragment_shader_path: &std::path::Path,
     ) -> Self {
-        let vertex_shader_module = load_shader(device, vertex_shader_path).unwrap();
-        let fragment_shader_module = load_shader(device, fragment_shader_path).unwrap();
+        let vertex_shader_module = load_shader(device, vertex_shader_path)
+            .expect("The vertex shader either wasn't found, or was invalid");
+        let fragment_shader_module = load_shader(device, fragment_shader_path)
+            .expect("The vertex shader either wasn't found, or was invalid");
 
         let shader_entry_point: CString = CString::new("main").unwrap();
 
@@ -67,8 +69,15 @@ impl Pipeline {
         let pipeline_layout = create_pipeline_layout(device);
         let pipeline_cache = create_pipeline_cache(device);
         let render_pass = create_render_pass(device, surface);
-        let graphics_pipeline =
-            create_graphics_pipeline(device, surface, &pipeline_layout, &render_pass, &pipeline_cache, vertex_shader_state_create_info, fragment_shader_state_create_info);
+        let graphics_pipeline = create_graphics_pipeline(
+            device,
+            surface,
+            &pipeline_layout,
+            &render_pass,
+            &pipeline_cache,
+            vertex_shader_state_create_info,
+            fragment_shader_state_create_info,
+        );
 
         Pipeline {
             device: Rc::downgrade(&device.logical_device),
@@ -77,7 +86,7 @@ impl Pipeline {
             render_pass,
             pipeline: graphics_pipeline,
             vertex_shader: vertex_shader_module,
-            fragment_shader: fragment_shader_module
+            fragment_shader: fragment_shader_module,
         }
     }
 }
@@ -111,8 +120,7 @@ impl Drop for Pipeline {
 /// * `device`: The `Device` to create the pipeline layout for
 ///
 fn create_pipeline_layout(device: &Device) -> vk::PipelineLayout {
-    let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::builder()
-        .build();
+    let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::builder().build();
 
     unsafe {
         device
@@ -254,7 +262,7 @@ fn create_graphics_pipeline(
     render_pass: &vk::RenderPass,
     pipeline_cache: &vk::PipelineCache,
     vertex_shader: vk::PipelineShaderStageCreateInfo,
-    fragment_shader: vk::PipelineShaderStageCreateInfo
+    fragment_shader: vk::PipelineShaderStageCreateInfo,
 ) -> vk::Pipeline {
     // let vertex_input_attribute_description = vk::VertexInputAttributeDescription::builder()
     //     .format(surface.swapchain_parameters.surface_format.format)
@@ -289,8 +297,8 @@ fn create_graphics_pipeline(
         .build();
 
     let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
-        .scissors(&[ scissor ])
-        .viewports(&[ viewport ])
+        .scissors(&[scissor])
+        .viewports(&[viewport])
         .build();
 
     let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
@@ -356,7 +364,6 @@ fn create_graphics_pipeline(
     .expect("Pipeline creation was successful, but returned no pipeline object")
 }
 
-
 /// Attempts to load a shader file from the `Path` provided, and creates a shader module using it.
 ///
 ///
@@ -383,11 +390,18 @@ fn create_graphics_pipeline(
 /// ```
 fn load_shader(device: &Device, relative_file_path: &std::path::Path) -> Option<vk::ShaderModule> {
     let current_exe = std::env::current_exe();
-    let joined_file_path = current_exe.unwrap().parent().unwrap().join(relative_file_path);
+    let joined_file_path = current_exe
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(relative_file_path);
     let absolute_file_path = joined_file_path.as_path();
 
     if !absolute_file_path.exists() {
-        warn!("Tried to load a shader at {:?} but it does not exist", absolute_file_path);
+        warn!(
+            "Tried to load a shader at {:?} but it does not exist",
+            absolute_file_path
+        );
         None
     } else {
         let code_as_bytes = std::fs::read(absolute_file_path).expect("Failed to read file");
