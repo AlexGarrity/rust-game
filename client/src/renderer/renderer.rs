@@ -9,7 +9,7 @@ pub struct Renderer {
     // Surface depends on device, which depends on context
     surface: Surface,
     device: Arc<RwLock<Device>>,
-    context: Context,
+    _context: Context,
 }
 
 impl Renderer {
@@ -19,13 +19,13 @@ impl Renderer {
         window: &winit::window::Window,
     ) -> Self {
         let context = Context::new(application_name, application_version);
-        let mut device = Arc::new(RwLock::new(Device::new(&context)));
+        let device = Arc::new(RwLock::new(Device::new(&context)));
         let surface = Surface::new(&context, &device, &window);
 
         Renderer {
             surface,
             device,
-            context,
+            _context: context,
         }
     }
 
@@ -45,7 +45,7 @@ impl Renderer {
             fragment_shader_path,
             shader_name.clone(),
         ) {
-            Err(error) => Err("Failed to create pipeline on device"),
+            Err(_error) => Err("Failed to create pipeline on device"),
             Ok(_) => {
                 let pipeline = device
                     .get_pipeline(shader_name.as_str())

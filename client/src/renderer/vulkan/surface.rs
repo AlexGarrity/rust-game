@@ -29,7 +29,7 @@ pub struct Surface {
     swapchain_extension: extensions::khr::Swapchain,
     swapchain: vk::SwapchainKHR,
     pub(in super::super::vulkan) swapchain_parameters: SwapChainParameters,
-    swapchain_images: Vec<vk::Image>,
+    _swapchain_images: Vec<vk::Image>,
     image_views: Vec<vk::ImageView>,
     framebuffers: Option<Vec<vk::Framebuffer>>,
     current_framebuffer_index: usize,
@@ -157,7 +157,7 @@ impl Surface {
         let semaphore_create_info = vk::SemaphoreCreateInfo::builder().build();
 
         let image_available: Vec<vk::Semaphore> = (0..MAX_FRAMES_IN_FLIGHT)
-            .map(|i| {
+            .map(|_| {
                 unsafe {
                     device
                         .logical_device
@@ -167,7 +167,7 @@ impl Surface {
             })
             .collect();
         let render_finished: Vec<vk::Semaphore> = (0..MAX_FRAMES_IN_FLIGHT)
-            .map(|i| {
+            .map(|_| {
                 unsafe {
                     device
                         .logical_device
@@ -182,7 +182,7 @@ impl Surface {
             .build();
 
         let frame_in_flight: Vec<vk::Fence> = (0..MAX_FRAMES_IN_FLIGHT)
-            .map(|i| {
+            .map(|_| {
                 unsafe { device.logical_device.create_fence(&fence_create_info, None) }
                     .expect("Failed to create fence for checking if frame is in flight")
             })
@@ -195,7 +195,7 @@ impl Surface {
             swapchain_extension,
             swapchain,
             swapchain_parameters,
-            swapchain_images,
+            _swapchain_images: swapchain_images,
             image_views,
             framebuffers: None,
             current_framebuffer_index: 0,
@@ -298,13 +298,6 @@ impl Surface {
 
     pub fn get_current_frame_index(&self) -> usize {
         return self.current_framebuffer_index;
-    }
-
-    pub fn get_frame_in_flight(&self) -> vk::Fence {
-        *self
-            .frame_in_flight
-            .get(self.current_framebuffer_index)
-            .unwrap()
     }
 }
 

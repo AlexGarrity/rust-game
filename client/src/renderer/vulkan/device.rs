@@ -8,10 +8,6 @@ use tracing::{debug, debug_span};
 use crate::renderer::vulkan::surface::MAX_FRAMES_IN_FLIGHT;
 use crate::renderer::vulkan::{Context, Pipeline, Surface};
 
-pub struct RenderPass {
-    pub command_buffer: vk::CommandBuffer,
-}
-
 struct DeviceQueueTriplet<T> {
     graphics: T,
     present: T,
@@ -30,17 +26,10 @@ type DeviceCommandPools = DeviceQueueTriplet<vk::CommandPool>;
 type DeviceCommandBuffers = DeviceQueueTriplet<Vec<vk::CommandBuffer>>;
 
 // FIXME - We also need a present queue to present
-enum QueueType {
-    Graphics,
-    Present,
-    Transfer,
-    Compute,
-}
-
 pub struct Device {
     pub physical_device: vk::PhysicalDevice,
     pub logical_device: Rc<ash::Device>,
-    queue_family_indices: DeviceQueueFamilyIndices,
+    _queue_family_indices: DeviceQueueFamilyIndices,
     queue_families: DeviceQueues,
     pipelines: HashMap<String, Pipeline>,
     command_pools: DeviceCommandPools,
@@ -181,7 +170,7 @@ impl Device {
         Device {
             physical_device: *physical_device,
             logical_device: Rc::new(logical_device),
-            queue_family_indices,
+            _queue_family_indices: queue_family_indices,
             queue_families,
             pipelines: HashMap::new(),
             command_pools,
