@@ -1,13 +1,14 @@
 use crate::renderer::Renderer;
-use std::ops::Deref;
 use std::path::Path;
-use tracing::debug;
+use std::process::ExitCode;
+use tracing::{debug, debug_span, error};
 use winit::event::{Event, WindowEvent};
-use winit::platform::wayland::EventLoopWindowTargetExtWayland;
 
 mod renderer;
 
-fn main() {
+fn main() -> ExitCode {
+    let span = debug_span!("Client");
+    let _guard = span.enter();
     println!("Client using Common {}", common::version());
 
     #[cfg(debug_assertions)]
@@ -32,7 +33,10 @@ fn main() {
         Path::new("res/shaders/basic.frag.spv"),
         String::from("basic"),
     ) {
-        Err(error) => panic!("Failed to create basic shader pipeline: {}", error),
+        Err(error_message) => {
+            error!("Failed to create basic shader pipeline: {}", error_message);
+            return ExitCode::FAILURE;
+        }
         Ok(_) => {}
     }
 
@@ -52,4 +56,6 @@ fn main() {
             _ => {}
         }
     });
+
+    ExitCode::SUCCESS
 }
