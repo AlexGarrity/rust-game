@@ -19,8 +19,9 @@ impl Renderer {
         window: &winit::window::Window,
     ) -> Self {
         let context = Context::new(application_name, application_version);
-        let device = Arc::new(RwLock::new(Device::new(&context)));
-        let surface = Surface::new(&context, &device, &window);
+        let mut surface = Surface::new(&context, &window);
+        let device = Arc::new(RwLock::new(Device::new(&context, &surface)));
+        surface.create_swapchain(&context, &device, window);
 
         Renderer {
             surface,

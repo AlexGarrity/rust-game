@@ -23,19 +23,19 @@ pub struct SwapChainParameters {
 }
 
 pub struct Surface {
-    device: Arc<RwLock<Device>>,
-    surface_extension: extensions::khr::Surface,
-    surface: vk::SurfaceKHR,
-    swapchain_extension: extensions::khr::Swapchain,
-    swapchain: vk::SwapchainKHR,
-    pub(in super::super::vulkan) swapchain_parameters: SwapChainParameters,
+    device: Option<Arc<RwLock<Device>>>,
+    pub(super) surface_extension: extensions::khr::Surface,
+    pub(super) surface: vk::SurfaceKHR,
+    swapchain_extension: Option<extensions::khr::Swapchain>,
+    swapchain: Option<vk::SwapchainKHR>,
+    pub(super) swapchain_parameters: Option<SwapChainParameters>,
     _swapchain_images: Vec<vk::Image>,
     image_views: Vec<vk::ImageView>,
     framebuffers: Option<Vec<vk::Framebuffer>>,
     current_framebuffer_index: usize,
     image_available: Vec<vk::Semaphore>,
     render_finished: Vec<vk::Semaphore>,
-    pub(in super::super::vulkan) frame_in_flight: Vec<vk::Fence>,
+    pub(super) frame_in_flight: Vec<vk::Fence>,
 }
 
 impl Surface {
@@ -60,17 +60,9 @@ impl Surface {
     /// let device = Device::new(&context);
     /// let surface = Surface::new(&context, &device, &window);
     /// ```
-    pub fn new(
-        context: &Context,
-        device_ref: &Arc<RwLock<Device>>,
-        window: &winit::window::Window,
-    ) -> Self {
+    pub fn new(context: &Context, window: &winit::window::Window) -> Self {
         let span = debug_span!("Vulkan/Surface");
         let _guard = span.enter();
-
-        let device_guard = device_ref.read();
-        let device_lock = device_guard.unwrap();
-        let device = device_lock.deref();
 
         let extension = extensions::khr::Surface::new(&context.entry_point, &context.instance);
         debug!("Creating SurfaceKHR");
@@ -86,14 +78,47 @@ impl Surface {
         .expect("Failed to create Vulkan surface");
         debug!("Successfully created surface");
 
-        let device_swapchain_info = get_swapchain_info(device, &surface, &extension);
+        Surface {
+            device: None,
+            surface_extension: extension,
+            surface,
+            swapchain_extension: None,
+            swapchain: None,
+            swapchain_parameters: None,
+            _swapchain_images: vec![],
+            image_views: vec![],
+            framebuffers: None,
+            current_framebuffer_index: 0,
+            image_available: vec![],
+            render_finished: vec![],
+            frame_in_flight: vec![],
+        }
+    }
+
+    pub fn create_swapchain(
+        &mut self,
+        context: &Context,
+        device: &Arc<RwLock<Device>>,
+        window: &winit::window::Window,
+    ) {
+        self.device = Some(device.clone());
+
+        let device_guard = self.device.as_ref().unwrap().read();
+        let device_lock = device_guard.unwrap();
+        let device = device_lock.deref();
+
+        self.swapchain_extension = Some(extensions::khr::Swapchain::new(
+            &context.instance,
+            &device.logical_device,
+        ));
+
+        let device_swapchain_info =
+            get_swapchain_info(device, &self.surface, &self.surface_extension);
         let swapchain_parameters =
             get_swapchain_parameters(&device_swapchain_info, window, None, None);
 
-        let swapchain_extension =
-            extensions::khr::Swapchain::new(&context.instance, device.logical_device.as_ref());
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
-            .surface(surface)
+            .surface(self.surface)
             .image_format(swapchain_parameters.surface_format.format)
             .image_color_space(swapchain_parameters.surface_format.color_space)
             .present_mode(swapchain_parameters.present_mode)
@@ -110,15 +135,26 @@ impl Surface {
             .build();
 
         debug!("Creating SwapchainKHR");
-        let swapchain =
-            unsafe { swapchain_extension.create_swapchain(&swapchain_create_info, None) }
-                .expect("Failed to create Vulkan swapchain");
+        let swapchain = unsafe {
+            self.swapchain_extension
+                .as_ref()
+                .unwrap()
+                .create_swapchain(&swapchain_create_info, None)
+        }
+        .expect("Failed to create Vulkan swapchain");
         debug!("Successfully created swapchain");
+        self.swapchain = Some(swapchain);
 
-        let swapchain_images = unsafe { swapchain_extension.get_swapchain_images(swapchain) }
-            .expect("Failed to create swapchain images");
+        self._swapchain_images = unsafe {
+            self.swapchain_extension
+                .as_ref()
+                .unwrap()
+                .get_swapchain_images(swapchain)
+        }
+        .expect("Failed to create swapchain images");
 
-        let image_views = swapchain_images
+        self.image_views = self
+            ._swapchain_images
             .iter()
             .map(|image| {
                 let image_view_create_info = vk::ImageViewCreateInfo::builder()
@@ -156,7 +192,7 @@ impl Surface {
 
         let semaphore_create_info = vk::SemaphoreCreateInfo::builder().build();
 
-        let image_available: Vec<vk::Semaphore> = (0..MAX_FRAMES_IN_FLIGHT)
+        self.image_available = (0..MAX_FRAMES_IN_FLIGHT)
             .map(|_| {
                 unsafe {
                     device
@@ -166,7 +202,7 @@ impl Surface {
                 .expect("Failed to create semaphore for checking if framebuffer is available")
             })
             .collect();
-        let render_finished: Vec<vk::Semaphore> = (0..MAX_FRAMES_IN_FLIGHT)
+        self.render_finished = (0..MAX_FRAMES_IN_FLIGHT)
             .map(|_| {
                 unsafe {
                     device
@@ -181,28 +217,14 @@ impl Surface {
             .flags(vk::FenceCreateFlags::SIGNALED)
             .build();
 
-        let frame_in_flight: Vec<vk::Fence> = (0..MAX_FRAMES_IN_FLIGHT)
+        self.frame_in_flight = (0..MAX_FRAMES_IN_FLIGHT)
             .map(|_| {
                 unsafe { device.logical_device.create_fence(&fence_create_info, None) }
                     .expect("Failed to create fence for checking if frame is in flight")
             })
             .collect();
 
-        Surface {
-            device: device_ref.clone(),
-            surface_extension: extension,
-            surface,
-            swapchain_extension,
-            swapchain,
-            swapchain_parameters,
-            _swapchain_images: swapchain_images,
-            image_views,
-            framebuffers: None,
-            current_framebuffer_index: 0,
-            image_available,
-            render_finished,
-            frame_in_flight,
-        }
+        self.swapchain_parameters = Some(swapchain_parameters);
     }
 
     pub fn create_framebuffers_for_pipeline(&mut self, device: &Device, pipeline: &Pipeline) {
@@ -210,8 +232,8 @@ impl Surface {
             .map(|index| {
                 let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
                     .render_pass(pipeline.render_pass)
-                    .width(self.swapchain_parameters.extent.width)
-                    .height(self.swapchain_parameters.extent.height)
+                    .width(self.swapchain_parameters.as_ref().unwrap().extent.width)
+                    .height(self.swapchain_parameters.as_ref().unwrap().extent.height)
                     .attachments(&[self.image_views[index]])
                     .layers(1)
                     .build();
@@ -239,25 +261,28 @@ impl Surface {
 
     pub fn acquire_next_image(&self) -> u32 {
         unsafe {
-            self.swapchain_extension.acquire_next_image(
-                self.swapchain,
-                u64::MAX,
-                *self
-                    .image_available
-                    .get(self.current_framebuffer_index)
-                    .unwrap(),
-                *self
-                    .frame_in_flight
-                    .get(self.current_framebuffer_index)
-                    .unwrap(),
-            )
+            self.swapchain_extension
+                .as_ref()
+                .unwrap()
+                .acquire_next_image(
+                    self.swapchain.unwrap(),
+                    u64::MAX,
+                    *self
+                        .image_available
+                        .get(self.current_framebuffer_index)
+                        .unwrap(),
+                    *self
+                        .frame_in_flight
+                        .get(self.current_framebuffer_index)
+                        .unwrap(),
+                )
         }
         .expect("Failed to acquire next image")
         .0
     }
 
     pub fn flip_buffers(&mut self, next_image: u32) {
-        let device_guard = self.device.read();
+        let device_guard = self.device.as_ref().unwrap().read();
         let device_lock = device_guard.unwrap();
         let device = device_lock.deref();
 
@@ -282,13 +307,13 @@ impl Surface {
                 .render_finished
                 .get(self.current_framebuffer_index)
                 .unwrap()])
-            .swapchains(&[self.swapchain])
+            .swapchains(&[self.swapchain.unwrap()])
             .image_indices(&[next_image])
             .build();
 
         device.present_queue(
             next_image as usize,
-            &self.swapchain_extension,
+            &self.swapchain_extension.as_ref().unwrap(),
             &present_info,
         );
 
@@ -306,11 +331,11 @@ impl Drop for Surface {
         let span = debug_span!("Vulkan/~Surface");
         let _guard = span.enter();
 
-        let device_guard = self.device.read();
+        let device_guard = self.device.as_ref().unwrap().read();
         let device_lock = device_guard.unwrap();
         let device = device_lock.deref();
 
-        for i in 0..MAX_FRAMES_IN_FLIGHT {
+        for i in 0..self.frame_in_flight.len() {
             unsafe {
                 device
                     .logical_device
@@ -349,12 +374,16 @@ impl Drop for Surface {
             debug!("Successfully destroyed image view");
         }
 
-        debug!("Destroying swapchain");
-        unsafe {
-            self.swapchain_extension
-                .destroy_swapchain(self.swapchain, None)
-        };
-        debug!("Successfully destroyed swapchain");
+        if self.swapchain.is_some() {
+            debug!("Destroying swapchain");
+            unsafe {
+                self.swapchain_extension
+                    .as_ref()
+                    .unwrap()
+                    .destroy_swapchain(self.swapchain.unwrap(), None)
+            };
+            debug!("Successfully destroyed swapchain");
+        }
 
         debug!("Destroying surface");
         unsafe { self.surface_extension.destroy_surface(self.surface, None) };

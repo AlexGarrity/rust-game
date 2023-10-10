@@ -156,7 +156,14 @@ fn create_pipeline_cache(device: &Device) -> vk::PipelineCache {
 ///
 fn create_render_pass(device: &Device, surface: &Surface) -> vk::RenderPass {
     let colour_attachment = vk::AttachmentDescription::builder()
-        .format(surface.swapchain_parameters.surface_format.format)
+        .format(
+            surface
+                .swapchain_parameters
+                .as_ref()
+                .unwrap()
+                .surface_format
+                .format,
+        )
         .samples(vk::SampleCountFlags::TYPE_1)
         .load_op(vk::AttachmentLoadOp::CLEAR)
         .store_op(vk::AttachmentStoreOp::STORE)
@@ -285,14 +292,14 @@ fn create_graphics_pipeline(
     let viewport = vk::Viewport::builder()
         .x(0.0)
         .y(0.0)
-        .width(surface.swapchain_parameters.extent.width as f32)
-        .height(surface.swapchain_parameters.extent.height as f32)
+        .width(surface.swapchain_parameters.as_ref().unwrap().extent.width as f32)
+        .height(surface.swapchain_parameters.as_ref().unwrap().extent.height as f32)
         .min_depth(0.0)
         .max_depth(1.0)
         .build();
 
     let scissor = vk::Rect2D::builder()
-        .extent(surface.swapchain_parameters.extent)
+        .extent(surface.swapchain_parameters.as_ref().unwrap().extent)
         .offset(vk::Offset2D::builder().x(0).y(0).build())
         .build();
 

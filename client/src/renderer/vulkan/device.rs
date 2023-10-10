@@ -52,7 +52,7 @@ impl Device {
     /// let context = new Context("my-application", (1.4.2));
     /// let device = Device::new(&context);
     /// ```
-    pub fn new(context: &Context) -> Device {
+    pub fn new(context: &Context, surface: &Surface) -> Device {
         let span = debug_span!("Vulkan/Device");
         let _guard = span.enter();
 
@@ -98,10 +98,11 @@ impl Device {
             current_memory / (1024 * 1024 * 1024)
         );
 
-        let queue_family_indices = find_device_queues_indices(context, physical_device);
+        let queue_family_indices = find_device_queues_indices(context, physical_device, surface);
         debug!(
-            "Selected queue index {} for graphics, {} for transfer, and {} for compute",
+            "Selected queue index {} for graphics, {} for present, {} for transfer, and {} for compute",
             queue_family_indices.graphics.index,
+            queue_family_indices.present.index,
             queue_family_indices.transfer.index,
             queue_family_indices.compute.index
         );
@@ -117,6 +118,11 @@ impl Device {
         let graphics_queue_create_info = vk::DeviceQueueCreateInfo::builder()
             .queue_family_index(queue_family_indices.graphics.index)
             .queue_priorities(graphics_queue_priorities.as_slice())
+            .build();
+
+        let present_queue_create_info = vk::DeviceQueueCreateInfo::builder()
+            .queue_family_index(queue_family_indices.present.index)
+            .queue_priorities(&[1.0])
             .build();
 
         let transfer_queue_priorities: Vec<f32> = (0..queue_family_indices.transfer.count)
@@ -142,6 +148,7 @@ impl Device {
             .enabled_features(&device_feature_info)
             .queue_create_infos(&[
                 graphics_queue_create_info,
+                present_queue_create_info,
                 transfer_queue_create_info,
                 compute_queue_create_info,
             ])
@@ -158,8 +165,9 @@ impl Device {
 
         let queue_families = create_device_queues(&logical_device, &queue_family_indices);
         debug!(
-            "Created {} queues for graphics, {} queues for transfer, and {} queues for compute",
+            "Created {} queues for graphics, {} queues for present, {} queues for transfer, and {} queues for compute",
             queue_families.graphics.len(),
+            queue_families.present.len(),
             queue_families.transfer.len(),
             queue_families.compute.len()
         );
@@ -293,7 +301,7 @@ impl Device {
         let clear_values = vk::ClearValue::default();
 
         let scissor = vk::Rect2D::builder()
-            .extent(surface.swapchain_parameters.extent)
+            .extent(surface.swapchain_parameters.as_ref().unwrap().extent)
             .offset(vk::Offset2D::builder().x(0).y(0).build())
             .build();
 
@@ -323,8 +331,8 @@ impl Device {
         let viewport = vk::Viewport::builder()
             .x(0.0)
             .y(0.0)
-            .width(surface.swapchain_parameters.extent.width as f32)
-            .height(surface.swapchain_parameters.extent.height as f32)
+            .width(surface.swapchain_parameters.as_ref().unwrap().extent.width as f32)
+            .height(surface.swapchain_parameters.as_ref().unwrap().extent.height as f32)
             .min_depth(0.0)
             .max_depth(1.0)
             .build();
@@ -638,8 +646,11 @@ fn create_device_queues(device: &ash::Device, indices: &DeviceQueueFamilyIndices
 fn find_device_queues_indices(
     context: &Context,
     device: &vk::PhysicalDevice,
+    surface: &Surface,
 ) -> DeviceQueueFamilyIndices {
     // TODO - Improve resiliency of finding device queues, as some devices don't have enough for a unique queues
+
+    let surface_extension = &surface.surface_extension;
 
     let queue_properties = unsafe {
         context
@@ -663,7 +674,52 @@ fn find_device_queues_indices(
         .expect("Failed to find a valid graphics queue");
 
     // TODO - Implement present queue heuristic
-    let present_queue = (0, 0);
+    let present_queue = {
+        let graphics_queue_surface_support = unsafe {
+            surface_extension.get_physical_device_surface_support(
+                *device,
+                graphics_queue.0 as u32,
+                surface.surface,
+            )
+        }
+        .unwrap();
+        if graphics_queue_surface_support {
+            graphics_queue.clone()
+        } else {
+            queue_properties
+                .iter()
+                .enumerate()
+                .reduce(|accum, current| {
+                    let queue_surface_support = unsafe {
+                        surface_extension.get_physical_device_surface_support(
+                            *device,
+                            current.0 as u32,
+                            surface.surface,
+                        )
+                    }
+                    .unwrap();
+                    let accum_surface_support = unsafe {
+                        surface_extension.get_physical_device_surface_support(
+                            *device,
+                            accum.0 as u32,
+                            surface.surface,
+                        )
+                    }
+                    .unwrap();
+
+                    if queue_surface_support && !accum_surface_support {
+                        current
+                    } else if accum_surface_support && !queue_surface_support {
+                        accum
+                    } else if current.1.queue_count > accum.1.queue_count {
+                        current
+                    } else {
+                        accum
+                    }
+                })
+                .unwrap()
+        }
+    };
 
     let transfer_queue = queue_properties
         .iter()
@@ -769,6 +825,7 @@ fn get_device_local_memory_size(context: &Context, device: &vk::PhysicalDevice) 
     };
     let heap_info = &device_memory_properties.memory_heaps;
 
+    // FIXME - This isn't foolproof, and will return multiple GB on an iGPU despite the fact that it's shared
     heap_info
         .iter()
         .enumerate()
