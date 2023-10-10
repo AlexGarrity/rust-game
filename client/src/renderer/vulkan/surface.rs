@@ -1,9 +1,14 @@
-use std::rc::{Rc, Weak};
+use std::ops::Deref;
+use std::sync::{Arc, RwLock};
+
 use ash::{extensions, vk};
-use winit::window::raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use num;
-use crate::renderer::vulkan::{Context, Device};
 use tracing::{debug, debug_span};
+use winit::window::raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
+
+use crate::renderer::vulkan::{Context, Device, Pipeline};
+
+pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 struct SwapChainInfo {
     capabilities: vk::SurfaceCapabilitiesKHR,
@@ -14,22 +19,26 @@ struct SwapChainInfo {
 pub struct SwapChainParameters {
     pub surface_format: vk::SurfaceFormatKHR,
     pub present_mode: vk::PresentModeKHR,
-    pub extent: vk::Extent2D
+    pub extent: vk::Extent2D,
 }
 
 pub struct Surface {
-    device: Weak<ash::Device>,
+    device: Arc<RwLock<Device>>,
     surface_extension: extensions::khr::Surface,
     surface: vk::SurfaceKHR,
     swapchain_extension: extensions::khr::Swapchain,
     swapchain: vk::SwapchainKHR,
-    pub swapchain_parameters: SwapChainParameters,
+    pub(in super::super::vulkan) swapchain_parameters: SwapChainParameters,
     swapchain_images: Vec<vk::Image>,
     image_views: Vec<vk::ImageView>,
+    framebuffers: Option<Vec<vk::Framebuffer>>,
+    current_framebuffer_index: usize,
+    image_available: Vec<vk::Semaphore>,
+    render_finished: Vec<vk::Semaphore>,
+    pub(in super::super::vulkan) frame_in_flight: Vec<vk::Fence>,
 }
 
 impl Surface {
-
     /// Constructs a new `Surface`
     ///
     /// # Arguments
@@ -51,9 +60,13 @@ impl Surface {
     /// let device = Device::new(&context);
     /// let surface = Surface::new(&context, &device, &window);
     /// ```
-    pub fn new(context: &Context, device: &Device, window: &winit::window::Window) -> Self {
+    pub fn new(context: &Context, device_ref: &Arc<RwLock<Device>>, window: &winit::window::Window) -> Self {
         let span = debug_span!("Vulkan/Surface");
         let _guard = span.enter();
+
+        let device_guard = device_ref.read();
+        let device_lock = device_guard.unwrap();
+        let device = device_lock.deref();
 
         let extension = extensions::khr::Surface::new(&context.entry_point, &context.instance);
         debug!("Creating SurfaceKHR");
@@ -64,7 +77,7 @@ impl Surface {
         let device_swapchain_info = get_swapchain_info(device, &surface, &extension);
         let swapchain_parameters = get_swapchain_parameters(&device_swapchain_info, window, None, None);
 
-        let swapchain_extension = extensions::khr::Swapchain::new(&context.instance, &device.logical_device);
+        let swapchain_extension = extensions::khr::Swapchain::new(&context.instance, device.logical_device.as_ref());
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(surface)
             .image_format(swapchain_parameters.surface_format.format)
@@ -86,8 +99,7 @@ impl Surface {
         let swapchain_images = unsafe { swapchain_extension.get_swapchain_images(swapchain) }
             .expect("Failed to create swapchain images");
 
-        let mut image_views = vec!();
-        for image in &swapchain_images {
+        let image_views = swapchain_images.iter().map(|image| {
             let image_view_create_info = vk::ImageViewCreateInfo::builder()
                 .image(*image)
                 .view_type(vk::ImageViewType::TYPE_2D)
@@ -113,11 +125,37 @@ impl Surface {
 
             let image_view = unsafe { device.logical_device.create_image_view(&image_view_create_info, None) }
                 .expect("Failed to create swapchain image view");
-            image_views.push(image_view);
-        }
+            image_view
+        })
+            .collect::<Vec<vk::ImageView>>();
+
+        let semaphore_create_info = vk::SemaphoreCreateInfo::builder()
+            .build();
+
+        let image_available: Vec<vk::Semaphore> = (0..MAX_FRAMES_IN_FLIGHT).map(|i| {
+            unsafe { device.logical_device.create_semaphore(&semaphore_create_info, None) }
+                .expect("Failed to create semaphore for checking if framebuffer is available")
+        })
+            .collect();
+        let render_finished: Vec<vk::Semaphore> = (0..MAX_FRAMES_IN_FLIGHT).map(|i| {
+            unsafe { device.logical_device.create_semaphore(&semaphore_create_info, None) }
+                .expect("Failed to create semaphore for checking if render is finished")
+        })
+            .collect();
+
+        let fence_create_info = vk::FenceCreateInfo::builder()
+            .flags(vk::FenceCreateFlags::SIGNALED)
+            .build();
+
+        let frame_in_flight: Vec<vk::Fence> = (0..MAX_FRAMES_IN_FLIGHT).map(|i| {
+            unsafe { device.logical_device.create_fence(&fence_create_info, None) }
+                .expect("Failed to create fence for checking if frame is in flight")
+        })
+            .collect();
+
 
         Surface {
-            device: Rc::downgrade(&device.logical_device),
+            device: device_ref.clone(),
             surface_extension: extension,
             surface,
             swapchain_extension,
@@ -125,7 +163,83 @@ impl Surface {
             swapchain_parameters,
             swapchain_images,
             image_views,
+            framebuffers: None,
+            current_framebuffer_index: 0,
+            image_available,
+            render_finished,
+            frame_in_flight,
         }
+    }
+
+    pub fn create_framebuffers_for_pipeline(&mut self, device: &Device, pipeline: &Pipeline) {
+        let framebuffers = (0..self.image_views.len()).map(|index| {
+            let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
+                .render_pass(pipeline.render_pass)
+                .width(self.swapchain_parameters.extent.width)
+                .height(self.swapchain_parameters.extent.height)
+                .attachments(&[self.image_views[index]])
+                .layers(1)
+                .build();
+
+            unsafe { device.logical_device.create_framebuffer(&framebuffer_create_info, None) }
+                .expect("Failed to create framebuffer")
+        })
+            .collect::<Vec<vk::Framebuffer>>();
+
+        self.framebuffers = Some(framebuffers);
+    }
+
+    pub fn get_framebuffer(&mut self, index: usize) -> &vk::Framebuffer {
+        let framebuffers = self.framebuffers
+            .as_ref()
+            .expect("No framebuffers have been created, but one has been requested");
+
+        framebuffers.get(index)
+            .unwrap()
+    }
+
+    pub fn acquire_next_image(&self) -> u32 {
+        unsafe {
+            self.swapchain_extension.acquire_next_image(
+                self.swapchain, u64::MAX,
+                *self.image_available.get(self.current_framebuffer_index).unwrap(),
+                *self.frame_in_flight.get(self.current_framebuffer_index).unwrap(),
+            )
+        }
+            .expect("Failed to acquire next image")
+            .0
+    }
+
+    pub fn flip_buffers(&mut self, next_image: u32) {
+        let device_guard = self.device.read();
+        let device_lock = device_guard.unwrap();
+        let device = device_lock.deref();
+
+        device.submit_graphics_queue(
+            self.current_framebuffer_index,
+            &[*self.render_finished.get(self.current_framebuffer_index).unwrap()],
+            &[*self.image_available.get(self.current_framebuffer_index).unwrap()],
+            &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
+            self.frame_in_flight.get(self.current_framebuffer_index).unwrap(),
+        );
+
+        let present_info = vk::PresentInfoKHR::builder()
+            .wait_semaphores(&[*self.render_finished.get(self.current_framebuffer_index).unwrap()])
+            .swapchains(&[self.swapchain])
+            .image_indices(&[next_image])
+            .build();
+
+        device.present_queue(next_image as usize, &self.swapchain_extension, &present_info);
+
+        self.current_framebuffer_index = (self.current_framebuffer_index + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    pub fn get_current_frame_index(&self) -> usize {
+        return self.current_framebuffer_index;
+    }
+
+    pub fn get_frame_in_flight(&self) -> vk::Fence {
+        *self.frame_in_flight.get(self.current_framebuffer_index).unwrap()
     }
 }
 
@@ -134,10 +248,30 @@ impl Drop for Surface {
         let span = debug_span!("Vulkan/~Surface");
         let _guard = span.enter();
 
+        let device_guard = self.device.read();
+        let device_lock = device_guard.unwrap();
+        let device = device_lock.deref();
+
+        for i in 0..MAX_FRAMES_IN_FLIGHT {
+            unsafe { device.logical_device.destroy_fence(*self.frame_in_flight.get(i).unwrap(), None) };
+            unsafe { device.logical_device.destroy_semaphore(*self.render_finished.get(i).unwrap(), None) };
+            unsafe { device.logical_device.destroy_semaphore(*self.image_available.get(i).unwrap(), None) };
+        }
+
+        match &self.framebuffers {
+            Some(framebuffers) => {
+                for framebuffer in framebuffers {
+                    debug!("Destroying framebuffer {:?}", framebuffer);
+                    unsafe { device.logical_device.destroy_framebuffer(*framebuffer, None) };
+                    debug!("Successfully destroyed framebuffer");
+                }
+            }
+            None => {}
+        }
+
         for image_view in &self.image_views {
             debug!("Destroying image view {:?}", image_view);
-            let device = self.device.upgrade().expect("Device should still exist");
-            unsafe { device.destroy_image_view(*image_view, None) };
+            unsafe { device.logical_device.destroy_image_view(*image_view, None) };
             debug!("Successfully destroyed image view");
         }
 
@@ -195,14 +329,11 @@ fn get_swapchain_parameters(swapchain_info: &SwapChainInfo, window: &winit::wind
     let format = swapchain_info.formats.iter().reduce(|accum, format| {
         if format.format == preferred.0 && format.color_space == preferred.1 {
             format
-        }
-        else if format.format == vk::Format::B8G8R8A8_UNORM && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR {
+        } else if format.format == vk::Format::B8G8R8A8_UNORM && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR {
             format
-        }
-        else if format.format == vk::Format::B8G8R8A8_SRGB && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR {
+        } else if format.format == vk::Format::B8G8R8A8_SRGB && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR {
             format
-        }
-        else {
+        } else {
             accum
         }
     })
@@ -215,8 +346,7 @@ fn get_swapchain_parameters(swapchain_info: &SwapChainInfo, window: &winit::wind
     let present_mode = swapchain_info.present_modes.iter().reduce(|accum, mode| {
         if *mode == preferred {
             mode
-        }
-        else if *mode == vk::PresentModeKHR::FIFO_RELAXED {
+        } else if *mode == vk::PresentModeKHR::FIFO_RELAXED {
             mode
         } else if *mode == vk::PresentModeKHR::FIFO {
             mode
@@ -243,7 +373,7 @@ fn get_swapchain_parameters(swapchain_info: &SwapChainInfo, window: &winit::wind
     SwapChainParameters {
         surface_format: *format,
         present_mode: *present_mode,
-        extent
+        extent,
     }
 }
 

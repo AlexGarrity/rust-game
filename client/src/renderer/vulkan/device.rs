@@ -6,25 +6,45 @@ use ash::vk;
 use tracing::{debug, debug_span};
 
 use crate::renderer::vulkan::{Context, Pipeline, Surface};
+use crate::renderer::vulkan::surface::MAX_FRAMES_IN_FLIGHT;
 
-struct DeviceQueueIndices {
-    graphics: (u32, u32),
-    transfer: (u32, u32),
-    compute: (u32, u32),
+pub struct RenderPass {
+    pub command_buffer: vk::CommandBuffer,
 }
 
-struct DeviceQueues {
-    graphics: Vec<vk::Queue>,
-    transfer: Vec<vk::Queue>,
-    compute: Vec<vk::Queue>,
+struct DeviceQueueTriplet<T> {
+    graphics: T,
+    present: T,
+    transfer: T,
+    compute: T,
 }
 
-pub struct Device {
+struct QueueFamilyInfo {
+    index: u32,
+    count: u32,
+}
+
+type DeviceQueueFamilyIndices = DeviceQueueTriplet<QueueFamilyInfo>;
+type DeviceQueues = DeviceQueueTriplet<Vec<vk::Queue>>;
+type DeviceCommandPools = DeviceQueueTriplet<vk::CommandPool>;
+type DeviceCommandBuffers = DeviceQueueTriplet<Vec<vk::CommandBuffer>>;
+
+// FIXME - We also need a present queue to present
+enum QueueType {
+    Graphics,
+    Present,
+    Transfer,
+    Compute
+}
+
+pub struct Device<> {
     pub physical_device: vk::PhysicalDevice,
     pub logical_device: Rc<ash::Device>,
-    queue_family_indices: DeviceQueueIndices,
+    queue_family_indices: DeviceQueueFamilyIndices,
     queue_families: DeviceQueues,
     pipelines: HashMap<String, Pipeline>,
+    command_pools: DeviceCommandPools,
+    command_buffers: DeviceCommandBuffers
 }
 
 impl Device {
@@ -43,14 +63,14 @@ impl Device {
     /// let context = new Context("my-application", (1.4.2));
     /// let device = Device::new(&context);
     /// ```
-    pub fn new(context: &Context) -> Self {
+    pub fn new(context: &Context) -> Device {
         let span = debug_span!("Vulkan/Device");
         let _guard = span.enter();
 
         let physical_devices = unsafe { context.instance.enumerate_physical_devices() }
             .expect("Failed to enumerate physical devices");
 
-        // TODO - Expand this. Some people still have multi-GPU setups
+        // TODO - Expand this. Some people still have multi-GPU setups and it would be nice to be able to support that
 
         let physical_device = physical_devices.iter().reduce(|accum, current| {
             let device_type = unsafe { context.instance.get_physical_device_properties(*current) }.device_type;
@@ -74,28 +94,28 @@ impl Device {
         debug!("Device has {} GB of dedicated memory", current_memory / (1024 * 1024 * 1024));
 
         let queue_family_indices = find_device_queues_indices(context, physical_device);
-        debug!("Selected queue index {} for graphics, {} for transfer, and {} for compute", queue_family_indices.graphics.0, queue_family_indices.transfer.0, queue_family_indices.compute.0);
+        debug!("Selected queue index {} for graphics, {} for transfer, and {} for compute", queue_family_indices.graphics.index, queue_family_indices.transfer.index, queue_family_indices.compute.index);
 
         // TODO - Handle what happens when the same queue family is requested multiple times.
         // The same queue family index can only be found in one QueueCreateInfo, unless the queue family has the protected bit set
         // Most devices don't have it set, so it's probably not worth factoring in
         // Consider converting the Queues inside DeviceQueues to Rcs and Weaks
 
-        let graphics_queue_priorities: Vec<f32> = (0..queue_family_indices.graphics.1).map(|_| { 1.0 }).collect();
+        let graphics_queue_priorities: Vec<f32> = (0..queue_family_indices.graphics.count).map(|_| { 1.0 }).collect();
         let graphics_queue_create_info = vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(queue_family_indices.graphics.0)
+            .queue_family_index(queue_family_indices.graphics.index)
             .queue_priorities(graphics_queue_priorities.as_slice())
             .build();
 
-        let transfer_queue_priorities: Vec<f32> = (0..queue_family_indices.transfer.1).map(|_| { 1.0 }).collect();
+        let transfer_queue_priorities: Vec<f32> = (0..queue_family_indices.transfer.count).map(|_| { 1.0 }).collect();
         let transfer_queue_create_info = vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(queue_family_indices.transfer.0)
+            .queue_family_index(queue_family_indices.transfer.index)
             .queue_priorities(transfer_queue_priorities.as_slice())
             .build();
 
-        let compute_queue_priorities: Vec<f32> = (0..queue_family_indices.compute.1).map(|_| { 1.0 }).collect();
+        let compute_queue_priorities: Vec<f32> = (0..queue_family_indices.compute.count).map(|_| { 1.0 }).collect();
         let compute_queue_create_info = vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(queue_family_indices.compute.0)
+            .queue_family_index(queue_family_indices.compute.index)
             .queue_priorities(compute_queue_priorities.as_slice())
             .build();
 
@@ -122,18 +142,24 @@ impl Device {
             queue_families.compute.len()
         );
 
+        let command_pools = create_command_pools(&logical_device, &queue_family_indices);
+        let command_buffers = create_command_buffers(&logical_device, &command_pools);
+
         Device {
             physical_device: *physical_device,
             logical_device: Rc::new(logical_device),
             queue_family_indices,
             queue_families,
             pipelines: HashMap::new(),
+            command_pools,
+            command_buffers,
         }
     }
 
     /// Constructs a new graphics pipeline on the device, referencable by the name provided
     ///
     /// If the device already has a pipeline with the given name or insertion fails, returns `false`
+    ///
     /// If the device does not have a pipeline with the given name and insertion succeeds, returns `true`
     ///
     /// # Arguments
@@ -174,6 +200,115 @@ impl Device {
                 .is_some()
         }
     }
+
+    /// Get a pipeline by name
+    ///
+    /// # Arguments
+    ///
+    /// * `name`: The name of the `Pipeline` to get
+    ///
+    pub fn get_pipeline(&self, name: &str) -> Option<&Pipeline> {
+        self.pipelines.get(name)
+    }
+
+    pub fn begin_graphics_render_pass(&self, current_frame: usize, surface: &mut Surface, pipeline_name: &str) -> u32 {
+        let command_buffer = *self.command_buffers.graphics.get(current_frame).unwrap();
+        let frame_in_flight = *surface.frame_in_flight.get(current_frame).unwrap();
+
+        unsafe { self.logical_device.wait_for_fences(&[frame_in_flight], true, u64::MAX) }
+            .expect("Device was removed or timed out whilst waiting for a fence");
+        unsafe { self.logical_device.reset_fences(&[frame_in_flight]) }
+            .expect("Could not reset fence");
+
+        let image_index = surface.acquire_next_image();
+
+        unsafe { self.logical_device.reset_command_buffer(command_buffer, vk::CommandBufferResetFlags::empty()) }
+            .expect("Failed to reset graphics command buffer");
+
+        let command_buffer_info = vk::CommandBufferBeginInfo::builder()
+            .build();
+        unsafe { self.logical_device.begin_command_buffer(command_buffer, &command_buffer_info) }
+            .expect("Failed to begin graphics command buffer)");
+
+        let pipeline = self.get_pipeline(pipeline_name)
+            .expect("Failed to get graphics pipeline");
+
+        let framebuffer = surface.get_framebuffer(image_index as usize).clone();
+        let clear_values = vk::ClearValue::default();
+
+        let scissor = vk::Rect2D::builder()
+            .extent(surface.swapchain_parameters.extent)
+            .offset(vk::Offset2D::builder()
+                .x(0)
+                .y(0)
+                .build()
+            )
+            .build();
+
+        let render_pass_info = vk::RenderPassBeginInfo::builder()
+            .render_pass(pipeline.render_pass)
+            .framebuffer(framebuffer)
+            .clear_values(&[clear_values])
+            .render_area(scissor)
+            .build();
+
+        unsafe { self.logical_device.cmd_begin_render_pass(
+            command_buffer,
+            &render_pass_info,
+            vk::SubpassContents::INLINE
+        ) };
+
+        unsafe { self.logical_device.cmd_bind_pipeline(
+            command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            pipeline.pipeline
+        ) }
+
+        let viewport = vk::Viewport::builder()
+            .x(0.0)
+            .y(0.0)
+            .width(surface.swapchain_parameters.extent.width as f32)
+            .height(surface.swapchain_parameters.extent.height as f32)
+            .min_depth(0.0)
+            .max_depth(1.0)
+            .build();
+
+        unsafe { self.logical_device.cmd_set_viewport(command_buffer, 0, &[viewport]) };
+        unsafe { self.logical_device.cmd_set_scissor(command_buffer, 0, &[scissor]) };
+
+        image_index
+    }
+
+    pub fn submit_graphics_queue(&self, frame_index: usize, signal_semaphores: &[vk::Semaphore], wait_semaphores: &[vk::Semaphore], stage_flags: &[vk::PipelineStageFlags], wait_fence: &vk::Fence) {
+        let submit_info = vk::SubmitInfo::builder()
+            .command_buffers(&[*self.command_buffers.graphics.get(frame_index).unwrap()])
+            .signal_semaphores(signal_semaphores)
+            .wait_semaphores(wait_semaphores)
+            .wait_dst_stage_mask(stage_flags)
+            .build();
+
+        // FIXME - Validation error `VUID-vkQueueSubmit-fence-00064` (fence is already in use by another submission)
+        // Probably because I forgot that present queues are a thing
+        unsafe { self.logical_device.queue_submit(*self.queue_families.graphics.get(frame_index).unwrap(), &[submit_info], *wait_fence) }
+            .expect("Failed to submit graphics queue");
+    }
+
+    pub fn present_queue(&self, frame_index: usize, swapchain_ext: &ash::extensions::khr::Swapchain, present_info: &vk::PresentInfoKHR) {
+        unsafe { swapchain_ext.queue_present(*self.queue_families.graphics.get(frame_index).unwrap(), present_info) }
+            .expect("Failed to present graphics queue");
+    }
+
+    pub fn draw_vertices(&mut self, frame_index: usize, vertex_count: u32) {
+        let command_buffer = *self.command_buffers.graphics.get(frame_index).unwrap();
+        unsafe { self.logical_device.cmd_draw(command_buffer, vertex_count, 1, 0, 0) };
+    }
+
+    pub fn end_graphics_render_pass(&mut self, frame_index: usize) {
+        let command_buffer = *self.command_buffers.graphics.get(frame_index).unwrap();
+        unsafe { self.logical_device.cmd_end_render_pass(command_buffer) };
+        unsafe { self.logical_device.end_command_buffer(command_buffer) }
+            .expect("Failed to end graphics command buffer")
+    }
 }
 
 impl Drop for Device {
@@ -181,11 +316,97 @@ impl Drop for Device {
         let span = debug_span!("Vulkan/~Device");
         let _guard = span.enter();
 
+        unsafe { self.logical_device.free_command_buffers(self.command_pools.graphics, self.command_buffers.graphics.as_slice()) };
+        unsafe { self.logical_device.free_command_buffers(self.command_pools.transfer, self.command_buffers.transfer.as_slice()) };
+        unsafe { self.logical_device.free_command_buffers(self.command_pools.compute, self.command_buffers.compute.as_slice()) };
+
+        unsafe { self.logical_device.destroy_command_pool(self.command_pools.graphics, None) };
+        unsafe { self.logical_device.destroy_command_pool(self.command_pools.transfer, None) };
+        unsafe { self.logical_device.destroy_command_pool(self.command_pools.compute, None) };
+
         self.pipelines.clear();
 
         debug!("Destroying logical device");
         unsafe { self.logical_device.destroy_device(None); }
         debug!("Successfully destroyed device");
+    }
+}
+
+fn create_command_buffers(device: &ash::Device, command_pools: &DeviceCommandPools) -> DeviceCommandBuffers {
+    let graphics_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
+        .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32)
+        .command_pool(command_pools.graphics)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .build();
+    let graphics = unsafe { device.allocate_command_buffers(&graphics_buffer_allocate_info) }
+        .expect("Failed to allocate primary graphics command buffer");
+
+    let present_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
+        .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32)
+        .command_pool(command_pools.present)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .build();
+    let present = unsafe { device.allocate_command_buffers(&present_buffer_allocate_info) }
+        .expect("Failed to allocate primary present command buffer");
+
+    let transfer_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
+        .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32)
+        .command_pool(command_pools.transfer)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .build();
+    let transfer = unsafe { device.allocate_command_buffers(&transfer_buffer_allocate_info) }
+        .expect("Failed to allocate primary transfer command buffer");
+
+    let compute_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
+        .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32)
+        .command_pool(command_pools.compute)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .build();
+    let compute = unsafe { device.allocate_command_buffers(&compute_buffer_allocate_info) }
+        .expect("Failed to allocate primary compute command buffer");
+
+    DeviceCommandBuffers {
+        graphics,
+        present,
+        transfer,
+        compute
+    }
+}
+
+fn create_command_pools(device: &ash::Device, queue_family_indices: &DeviceQueueFamilyIndices) -> DeviceCommandPools {
+    let graphics_queue_pool_create_info = vk::CommandPoolCreateInfo::builder()
+        .queue_family_index(queue_family_indices.graphics.index)
+        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+        .build();
+    let graphics = unsafe { device.create_command_pool(&graphics_queue_pool_create_info, None) }
+        .expect("Failed to create graphics command pool");
+
+    let present_queue_pool_create_info = vk::CommandPoolCreateInfo::builder()
+        .queue_family_index(queue_family_indices.present.index)
+        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+        .build();
+    let present = unsafe { device.create_command_pool(&present_queue_pool_create_info, None) }
+        .expect("Failed to create present command pool");
+
+    let transfer_queue_pool_create_info = vk::CommandPoolCreateInfo::builder()
+        .queue_family_index(queue_family_indices.transfer.index)
+        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+        .build();
+    let transfer = unsafe { device.create_command_pool(&transfer_queue_pool_create_info, None) }
+        .expect("Failed to create transfer command pool");
+
+    let compute_queue_pool_create_info = vk::CommandPoolCreateInfo::builder()
+        .queue_family_index(queue_family_indices.compute.index)
+        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+        .build();
+    let compute = unsafe { device.create_command_pool(&compute_queue_pool_create_info, None) }
+        .expect("Failed to create graphics command pool");
+
+    DeviceCommandPools {
+        graphics,
+        present,
+        transfer,
+        compute,
     }
 }
 
@@ -242,18 +463,24 @@ impl Drop for Device {
 /// let logical_device = unsafe { context.instance.create_device(*physical_device, &device_create_info, None) }
 ///     .expect("Failed to create a logical device");
 /// ```
-fn create_device_queues(device: &ash::Device, indices: &DeviceQueueIndices) -> DeviceQueues {
+fn create_device_queues(device: &ash::Device, indices: &DeviceQueueFamilyIndices) -> DeviceQueues {
+    // TODO - Improve resiliency of creating device queues, such that queue types can share queues if required
+
     DeviceQueues {
-        graphics: (0..indices.graphics.1).map(|i| {
-            unsafe { device.get_device_queue(indices.graphics.0, i) }
+        graphics: (0..indices.graphics.count).map(|i| {
+            unsafe { device.get_device_queue(indices.graphics.index, i) }
         })
             .collect(),
-        transfer: (0..indices.transfer.1).map(|i| {
-            unsafe { device.get_device_queue(indices.transfer.0, i) }
+        present: (0..indices.present.count).map(|i| {
+            unsafe { device.get_device_queue(indices.present.index, i) }
         })
             .collect(),
-        compute: (0..indices.compute.1).map(|i| {
-            unsafe { device.get_device_queue(indices.compute.0, i) }
+        transfer: (0..indices.transfer.count).map(|i| {
+            unsafe { device.get_device_queue(indices.transfer.index, i) }
+        })
+            .collect(),
+        compute: (0..indices.compute.count).map(|i| {
+            unsafe { device.get_device_queue(indices.compute.index, i) }
         })
             .collect(),
     }
@@ -282,7 +509,9 @@ fn create_device_queues(device: &ash::Device, indices: &DeviceQueueIndices) -> D
 ///
 /// let queue_family_indices = find_device_queues_indices(context, physical_device);
 /// ```
-fn find_device_queues_indices(context: &Context, device: &vk::PhysicalDevice) -> DeviceQueueIndices {
+fn find_device_queues_indices(context: &Context, device: &vk::PhysicalDevice) -> DeviceQueueFamilyIndices {
+    // TODO - Improve resiliency of finding device queues, as some devices don't have enough for a unique queues
+
     let queue_properties = unsafe { context.instance.get_physical_device_queue_family_properties(*device) };
 
     // Find the best graphics queue possible - high queue count and graphics supported
@@ -296,6 +525,9 @@ fn find_device_queues_indices(context: &Context, device: &vk::PhysicalDevice) ->
         }
     })
         .expect("Failed to find a valid graphics queue");
+
+    // TODO - Implement present queue heuristic
+    let present_queue = (0, 0);
 
     let transfer_queue = queue_properties.iter().enumerate().reduce(|accum, current| {
         if !current.1.queue_flags.contains(vk::QueueFlags::TRANSFER) {
@@ -336,12 +568,15 @@ fn find_device_queues_indices(context: &Context, device: &vk::PhysicalDevice) ->
     })
         .expect("Failed to find a valid compute queue");
 
-    let graphics = (graphics_queue.0 as u32, graphics_queue.1.queue_count);
-    let transfer = (transfer_queue.0 as u32, transfer_queue.1.queue_count);
-    let compute = (compute_queue.0 as u32, compute_queue.1.queue_count);
+    let graphics = QueueFamilyInfo { index: graphics_queue.0 as u32, count: graphics_queue.1.queue_count };
+    // TODO - Present queue heuristic
+    let present = QueueFamilyInfo { index: present_queue.0 as u32, count: 0 };
+    let transfer = QueueFamilyInfo { index: transfer_queue.0 as u32, count: transfer_queue.1.queue_count };
+    let compute = QueueFamilyInfo { index: compute_queue.0 as u32, count: compute_queue.1.queue_count };
 
-    DeviceQueueIndices {
+    DeviceQueueFamilyIndices {
         graphics,
+        present,
         transfer,
         compute,
     }
@@ -375,12 +610,10 @@ fn get_device_local_memory_size(context: &Context, device: &vk::PhysicalDevice) 
     heap_info.iter().enumerate().map(|heap| {
         if heap.0 >= device_memory_properties.memory_heap_count as usize {
             0u64
-        }
-        else {
+        } else {
             if heap.1.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL) {
                 heap.1.size as u64
-            }
-            else {
+            } else {
                 0u64
             }
         }

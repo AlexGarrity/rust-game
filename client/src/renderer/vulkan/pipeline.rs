@@ -9,8 +9,8 @@ pub struct Pipeline {
     device: Weak<ash::Device>,
     layout: vk::PipelineLayout,
     cache: vk::PipelineCache,
-    render_pass: vk::RenderPass,
-    pipeline: vk::Pipeline,
+    pub render_pass: vk::RenderPass,
+    pub(crate) pipeline: vk::Pipeline,
     vertex_shader: vk::ShaderModule,
     fragment_shader: vk::ShaderModule
 }
@@ -88,6 +88,7 @@ impl Drop for Pipeline {
         let _guard = span.enter();
 
         let device = self.device.upgrade().expect("Device should still exist");
+
         debug!("Destroying pipeline");
         unsafe { device.destroy_pipeline(self.pipeline, None) };
         debug!("Destroying render pass");
@@ -162,14 +163,22 @@ fn create_render_pass(device: &Device, surface: &Surface) -> vk::RenderPass {
         .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
         .build();
 
-    let sub_pass = vk::SubpassDescription::builder()
+    let subpass = vk::SubpassDescription::builder()
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
         .color_attachments(&[colour_attachment_reference])
         .build();
 
+    let subpass_dependency = vk::SubpassDependency::builder()
+        .src_subpass(vk::SUBPASS_EXTERNAL)
+        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+        .build();
+
     let render_pass_create_info = vk::RenderPassCreateInfo::builder()
         .attachments(&[colour_attachment])
-        .subpasses(&[sub_pass])
+        .subpasses(&[subpass])
+        .dependencies(&[subpass_dependency])
         .build();
 
     unsafe {
@@ -247,18 +256,18 @@ fn create_graphics_pipeline(
     vertex_shader: vk::PipelineShaderStageCreateInfo,
     fragment_shader: vk::PipelineShaderStageCreateInfo
 ) -> vk::Pipeline {
-    let vertex_input_attribute_description = vk::VertexInputAttributeDescription::builder()
-        .format(surface.swapchain_parameters.surface_format.format)
-        .location(0)
-        .build();
+    // let vertex_input_attribute_description = vk::VertexInputAttributeDescription::builder()
+    //     .format(surface.swapchain_parameters.surface_format.format)
+    //     .location(0)
+    //     .build();
 
-    let vertex_input_binding_description = vk::VertexInputBindingDescription::builder()
-        .binding(0)
-        .build();
+    // let vertex_input_binding_description = vk::VertexInputBindingDescription::builder()
+    //     .binding(0)
+    //     .build();
 
     let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
-        .vertex_attribute_descriptions(&[vertex_input_attribute_description])
-        .vertex_binding_descriptions(&[vertex_input_binding_description])
+        .vertex_attribute_descriptions(&[])
+        .vertex_binding_descriptions(&[])
         .build();
 
     let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()

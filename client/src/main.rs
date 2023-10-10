@@ -1,5 +1,9 @@
+use std::ops::Deref;
 use std::path::Path;
+use tracing::debug;
 use winit::event::{Event, WindowEvent};
+use winit::platform::wayland::EventLoopWindowTargetExtWayland;
+use crate::renderer::Renderer;
 
 mod renderer;
 
@@ -17,18 +21,19 @@ fn main() {
         .unwrap();
 
     let window = winit::window::WindowBuilder::new()
-        .with_transparent(true)
+        .with_transparent(false)
+        .with_active(true)
         .with_title("Application")
         .with_inner_size(winit::dpi::PhysicalSize::new(1280, 720))
         .build(&event_loop)
         .unwrap();
 
-    let vulkan_context = renderer::vulkan::Context::new("application", (0, 1, 0));
-    let mut vulkan_device = renderer::vulkan::Device::new(&vulkan_context);
-    let vulkan_surface = renderer::vulkan::Surface::new(&vulkan_context, &vulkan_device, &window);
-    vulkan_device.create_pipeline(&vulkan_surface, Path::new("res/shaders/basic.vert.spv"), Path::new("res/shaders/basic.frag.spv"), String::from("basic"));
+    let mut renderer = Renderer::new("survival-game", (0, 1, 0), &window);
+    renderer.load_shader(Path::new("res/shaders/basic.vert.spv"), Path::new("res/shaders/basic.frag.spv"), String::from("basic"))
+        .expect("Failed to load basic shader");
 
     let _ = event_loop.run(|event, _window_target, control_flow| {
+        control_flow.set_poll();
         match event {
             Event::WindowEvent { event, .. } => {
                 if event == WindowEvent::CloseRequested {
@@ -36,7 +41,9 @@ fn main() {
                 }
             }
             Event::RedrawRequested(_id) => {
-                
+                window.pre_present_notify();
+                renderer.render();
+                debug!("Redraw");
             }
             _ => {}
         }
