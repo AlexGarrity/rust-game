@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
 use std::rc::Rc;
 
@@ -21,11 +21,13 @@ struct QueueFamilyInfo {
 }
 
 type DeviceQueueFamilyIndices = DeviceQueueTriplet<QueueFamilyInfo>;
+
+// TODO - The vk::Queues probably need wrapping in RwLocks because otherwise
+// a queue could be written to in multiple places at the same time if queues are shared
 type DeviceQueues = DeviceQueueTriplet<Vec<vk::Queue>>;
 type DeviceCommandPools = DeviceQueueTriplet<vk::CommandPool>;
 type DeviceCommandBuffers = DeviceQueueTriplet<Vec<vk::CommandBuffer>>;
 
-// FIXME - We also need a present queue to present
 pub struct Device {
     pub physical_device: vk::PhysicalDevice,
     pub logical_device: Rc<ash::Device>,
@@ -112,6 +114,10 @@ impl Device {
         // Most devices don't have it set, so it's probably not worth factoring in
         // Consider converting the Queues inside DeviceQueues to Rcs and Weaks
 
+        let mut queue_create_infos = vec![];
+
+        let mut indices_used = HashSet::new();
+
         let graphics_queue_priorities: Vec<f32> = (0..queue_family_indices.graphics.count)
             .map(|_| 1.0)
             .collect();
@@ -120,38 +126,49 @@ impl Device {
             .queue_priorities(graphics_queue_priorities.as_slice())
             .build();
 
-        let present_queue_create_info = vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(queue_family_indices.present.index)
-            .queue_priorities(&[1.0])
-            .build();
+        queue_create_infos.push(graphics_queue_create_info);
+        indices_used.insert(queue_family_indices.graphics.index);
 
-        let transfer_queue_priorities: Vec<f32> = (0..queue_family_indices.transfer.count)
-            .map(|_| 1.0)
-            .collect();
-        let transfer_queue_create_info = vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(queue_family_indices.transfer.index)
-            .queue_priorities(transfer_queue_priorities.as_slice())
-            .build();
+        if !indices_used.contains(&queue_family_indices.transfer.index) {
+            let transfer_queue_priorities: Vec<f32> = (0..queue_family_indices.transfer.count)
+                .map(|_| 1.0)
+                .collect();
+            let transfer_queue_create_info = vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(queue_family_indices.transfer.index)
+                .queue_priorities(transfer_queue_priorities.as_slice())
+                .build();
+            queue_create_infos.push(transfer_queue_create_info);
+            indices_used.insert(queue_family_indices.transfer.index);
+        }
 
-        let compute_queue_priorities: Vec<f32> = (0..queue_family_indices.compute.count)
-            .map(|_| 1.0)
-            .collect();
-        let compute_queue_create_info = vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(queue_family_indices.compute.index)
-            .queue_priorities(compute_queue_priorities.as_slice())
-            .build();
+        if !indices_used.contains(&queue_family_indices.compute.index) {
+            let compute_queue_priorities: Vec<f32> = (0..queue_family_indices.compute.count)
+                .map(|_| 1.0)
+                .collect();
+            let compute_queue_create_info = vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(queue_family_indices.compute.index)
+                .queue_priorities(compute_queue_priorities.as_slice())
+                .build();
+            queue_create_infos.push(compute_queue_create_info);
+            indices_used.insert(queue_family_indices.compute.index);
+        }
+
+        // We do present last, since we only make one queue
+        if !indices_used.contains(&queue_family_indices.present.index) {
+            let present_queue_create_info = vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(queue_family_indices.present.index)
+                .queue_priorities(&[1.0])
+                .build();
+            queue_create_infos.push(present_queue_create_info);
+            indices_used.insert(queue_family_indices.present.index);
+        }
 
         let device_feature_info = vk::PhysicalDeviceFeatures::builder().build();
 
         let device_create_info = vk::DeviceCreateInfo::builder()
             .enabled_extension_names(&[ash::extensions::khr::Swapchain::name().as_ptr()])
             .enabled_features(&device_feature_info)
-            .queue_create_infos(&[
-                graphics_queue_create_info,
-                present_queue_create_info,
-                transfer_queue_create_info,
-                compute_queue_create_info,
-            ])
+            .queue_create_infos(queue_create_infos.as_slice())
             .build();
 
         debug!("Creating logical device");
@@ -382,6 +399,7 @@ impl Device {
         swapchain_ext: &ash::extensions::khr::Swapchain,
         present_info: &vk::PresentInfoKHR,
     ) {
+        // FIXME - Use the present queue for this
         unsafe {
             swapchain_ext.queue_present(
                 *self.queue_families.graphics.get(frame_index).unwrap(),
@@ -602,7 +620,9 @@ fn create_command_pools(
 ///     .expect("Failed to create a logical device");
 /// ```
 fn create_device_queues(device: &ash::Device, indices: &DeviceQueueFamilyIndices) -> DeviceQueues {
-    // TODO - Improve resiliency of creating device queues, such that queue types can share queues if required
+    // TODO - It's possible that this will retrieve the same queues multiple times.
+    // Whilst I don't think it's necessarily harmful, I can't imagine that calling
+    // free on the same n queues multiple times is something that the API likes
 
     DeviceQueues {
         graphics: (0..indices.graphics.count)
@@ -648,8 +668,6 @@ fn find_device_queues_indices(
     device: &vk::PhysicalDevice,
     surface: &Surface,
 ) -> DeviceQueueFamilyIndices {
-    // TODO - Improve resiliency of finding device queues, as some devices don't have enough for a unique queues
-
     let surface_extension = &surface.surface_extension;
 
     let queue_properties = unsafe {
@@ -673,7 +691,6 @@ fn find_device_queues_indices(
         })
         .expect("Failed to find a valid graphics queue");
 
-    // TODO - Implement present queue heuristic
     let present_queue = {
         let graphics_queue_surface_support = unsafe {
             surface_extension.get_physical_device_surface_support(
@@ -683,8 +700,9 @@ fn find_device_queues_indices(
             )
         }
         .unwrap();
+
         if graphics_queue_surface_support {
-            graphics_queue.clone()
+            (graphics_queue.0, graphics_queue.1)
         } else {
             queue_properties
                 .iter()
@@ -774,10 +792,9 @@ fn find_device_queues_indices(
         index: graphics_queue.0 as u32,
         count: graphics_queue.1.queue_count,
     };
-    // TODO - Present queue heuristic
     let present = QueueFamilyInfo {
         index: present_queue.0 as u32,
-        count: 0,
+        count: present_queue.1.queue_count,
     };
     let transfer = QueueFamilyInfo {
         index: transfer_queue.0 as u32,
