@@ -1,7 +1,7 @@
 use crate::renderer::Renderer;
 use std::path::Path;
 use std::process::ExitCode;
-use tracing::{debug, debug_span, error};
+use tracing::{debug, debug_span, error, info};
 use winit::event::{Event, WindowEvent};
 
 mod renderer;
@@ -9,13 +9,19 @@ mod renderer;
 fn main() -> ExitCode {
     let span = debug_span!("Client");
     let _guard = span.enter();
-    println!("Client using Common {}", common::version());
 
+    // TODO - Env override for logging level
     #[cfg(debug_assertions)]
+    let error_level = tracing::Level::DEBUG;
+    #[cfg(not(debug_assertions))]
+    let error_level = tracing::Level::ERROR;
+
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(error_level)
         .with_target(true)
         .init();
+
+    info!("Client using Common {}", common::version());
 
     let event_loop = winit::event_loop::EventLoopBuilder::new().build().unwrap();
 
