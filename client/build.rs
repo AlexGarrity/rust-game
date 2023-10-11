@@ -8,21 +8,18 @@ use shaderc::{Compiler, ShaderKind};
 const ASSETS_DIR: &'static str = "res";
 const BUILD_DIR_ENV_NAME: &'static str = "OUT_DIR";
 
-fn compile_shader_file(compiler: &Compiler, path: &PathBuf, shader_kind: ShaderKind) -> Result<(), &'static str> {
+fn compile_shader_file(
+    compiler: &Compiler,
+    path: &PathBuf,
+    shader_kind: ShaderKind,
+) -> Result<(), &'static str> {
     // TODO - Make this actually compile shaders
     let file_path = path.to_str().unwrap();
-    let file_contents =
-        std::fs::read(file_path).expect("Failed to read shader source file");
-    let source = String::from_utf8(file_contents)
-        .expect("Shader source file contains invalid characters");
+    let file_contents = std::fs::read(file_path).expect("Failed to read shader source file");
+    let source =
+        String::from_utf8(file_contents).expect("Shader source file contains invalid characters");
     let compilation_result = compiler
-        .compile_into_spirv(
-            source.as_str(),
-            shader_kind,
-            file_path,
-            "main",
-            None,
-        )
+        .compile_into_spirv(source.as_str(), shader_kind, file_path, "main", None)
         .expect("Shader file could not be compiled");
     let spirv = compilation_result.as_binary_u8();
 
@@ -31,7 +28,8 @@ fn compile_shader_file(compiler: &Compiler, path: &PathBuf, shader_kind: ShaderK
         .write(true)
         .open(path.join(".spv"))
         .expect("Failed to open writer for SPIR-V file");
-    file_writer.write_all(spirv)
+    file_writer
+        .write_all(spirv)
         .expect("Failed to write spirv file");
 
     Ok(())
@@ -70,7 +68,7 @@ fn compile_shader_files() -> Result<(), &'static str> {
 }
 
 fn main() -> Result<(), String> {
-    println!("cargo:rerun-if-changed={}/*", ASSETS_DIR);
+    // println!("cargo:rerun-if-changed={}/*", ASSETS_DIR);
 
     let compilation_result = compile_shader_files();
     if compilation_result.is_err() {

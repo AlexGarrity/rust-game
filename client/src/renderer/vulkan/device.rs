@@ -246,25 +246,28 @@ impl Device {
         fragment_shader_path: &std::path::Path,
         name: String,
     ) -> Result<(), &'static str> {
+        let executable_path = std::env::current_exe().unwrap();
+
         if self.pipelines.contains_key(name.as_str()) {
             Err("A pipeline already exists with the specified name")
-        } else if !vertex_shader_path.exists() {
+        } else if !executable_path
+            .parent()
+            .unwrap()
+            .join(vertex_shader_path)
+            .exists()
+        {
             Err("A shader file could not be found at the specified path")
-        } else if !fragment_shader_path.exists() {
+        } else if !executable_path
+            .parent()
+            .unwrap()
+            .join(fragment_shader_path)
+            .exists()
+        {
             Err("A shader file could not be found at the specified path")
         } else {
-            if self
-                .pipelines
-                .insert(
-                    name,
-                    Pipeline::new(self, surface, vertex_shader_path, fragment_shader_path),
-                )
-                .is_some()
-            {
-                Ok(())
-            } else {
-                Err("Failed to insert pipeline into device map")
-            }
+            let pipeline = Pipeline::new(self, surface, vertex_shader_path, fragment_shader_path);
+            let _res = self.pipelines.insert(name, pipeline);
+            Ok(())
         }
     }
 
