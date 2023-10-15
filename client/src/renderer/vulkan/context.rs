@@ -30,7 +30,6 @@ impl Context {
         let span = debug_span!("Vulkan/Context");
         let _guard = span.enter();
 
-        // TODO - See if we can link statically instead
         debug!("Loading Vulkan dynamically");
         let entry_point = unsafe { ash::Entry::load() }.expect("Failed to load Vulkan libraries");
         debug!("Loaded successfully");
@@ -54,6 +53,11 @@ impl Context {
         let validation_layer_name = CString::new("VK_LAYER_KHRONOS_validation").unwrap();
 
         // TODO - Figure out if it's worth just targeting Wayland on Unix
+        // KDE will be moving to a Wayland default session with Plasma 6 (Steam Deck uses KDE)
+        // GNOME already favours Wayland
+        // XWayland exists to bridge the gap, but nothing going the other way
+        // NVIDIA Wayland drivers aren't particularly mature, AMD are fine, Intel is untested
+
         // TODO - Test for extensions before using them (albeit if we don't have surface then we're a bit scuppered anyway)
         let instance_create_info = vk::InstanceCreateInfo::builder()
             .application_info(&application_info)

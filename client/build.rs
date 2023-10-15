@@ -1,16 +1,16 @@
-use std::{io::Write, path::PathBuf};
+use std::{io::Write, path::Path};
 
 use fs_extra::copy_items;
 use fs_extra::dir::CopyOptions;
 use glob::glob;
 use shaderc::{Compiler, ShaderKind};
 
-const ASSETS_DIR: &'static str = "res";
-const BUILD_DIR_ENV_NAME: &'static str = "OUT_DIR";
+const ASSETS_DIR: &str = "res";
+const BUILD_DIR_ENV_NAME: &str = "OUT_DIR";
 
 fn compile_shader_file(
     compiler: &Compiler,
-    path: &PathBuf,
+    path: &Path,
     shader_kind: ShaderKind,
 ) -> Result<(), &'static str> {
     // TODO - Make this actually compile shaders
@@ -72,7 +72,7 @@ fn main() -> Result<(), String> {
 
     let compilation_result = compile_shader_files();
     if compilation_result.is_err() {
-        return Err(format!("Failed to compile all shaders"));
+        return Err(String::from("Failed to compile all shaders"));
     }
 
     let out_dir = std::env::var(BUILD_DIR_ENV_NAME).unwrap();

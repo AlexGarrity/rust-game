@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::renderer::vulkan::{Context, Device, Surface};
 
-pub struct Renderer {
+pub struct VertexRenderer {
     // These must stay in order as objects are dropped in the order they're declared
     // Surface depends on device, which depends on context
     surface: Surface,
@@ -12,18 +12,18 @@ pub struct Renderer {
     _context: Context,
 }
 
-impl Renderer {
+impl VertexRenderer {
     pub fn new(
         application_name: &str,
         application_version: (u32, u32, u32),
         window: &winit::window::Window,
     ) -> Self {
         let context = Context::new(application_name, application_version);
-        let mut surface = Surface::new(&context, &window);
+        let mut surface = Surface::new(&context, window);
         let device = Arc::new(RwLock::new(Device::new(&context, &surface)));
         surface.create_swapchain(&context, &device, window);
 
-        Renderer {
+        Self {
             surface,
             device,
             _context: context,
@@ -52,7 +52,7 @@ impl Renderer {
                     .get_pipeline(shader_name.as_str())
                     .expect("Failed to get pipeline after creation");
                 self.surface
-                    .create_framebuffers_for_pipeline(&device, pipeline);
+                    .create_framebuffers_for_pipeline(device, pipeline);
                 Ok(())
             }
         }
@@ -76,7 +76,7 @@ impl Renderer {
     }
 }
 
-impl Drop for Renderer {
+impl Drop for VertexRenderer {
     fn drop(&mut self) {
         unsafe {
             self.device

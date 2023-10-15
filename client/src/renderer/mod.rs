@@ -1,4 +1,5 @@
 pub mod vulkan;
 
-mod renderer;
-pub use renderer::Renderer;
+mod vertex_renderer;
+
+pub use vertex_renderer::VertexRenderer;

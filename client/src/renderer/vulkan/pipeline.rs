@@ -414,8 +414,7 @@ fn load_shader(device: &Device, relative_file_path: &std::path::Path) -> Option<
         let code_as_bytes = std::fs::read(absolute_file_path).expect("Failed to read file");
 
         let mut cursor = std::io::Cursor::new(&code_as_bytes);
-        let mut code = Vec::<u32>::new();
-        code.resize(code_as_bytes.len() / 4, 0);
+        let mut code = vec![0u32; code_as_bytes.len() / 4];
         let _res = cursor.read_u32_into::<LittleEndian>(code.as_mut_slice());
 
         let shader_module_create_info = vk::ShaderModuleCreateInfo::builder()

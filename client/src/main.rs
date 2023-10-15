@@ -1,7 +1,7 @@
-use crate::renderer::Renderer;
+use crate::renderer::VertexRenderer;
 use std::path::Path;
 use std::process::ExitCode;
-use tracing::{debug, debug_span, error, info};
+use tracing::{debug_span, error, info};
 use winit::event::{Event, WindowEvent};
 
 mod renderer;
@@ -33,17 +33,14 @@ fn main() -> ExitCode {
         .build(&event_loop)
         .unwrap();
 
-    let mut renderer = Renderer::new("survival-game", (0, 1, 0), &window);
-    match renderer.load_shader(
+    let mut renderer = VertexRenderer::new("survival-game", (0, 1, 0), &window);
+    if let Err(error_message) = renderer.load_shader(
         Path::new("res/shaders/basic.vert.spv"),
         Path::new("res/shaders/basic.frag.spv"),
         String::from("basic"),
     ) {
-        Err(error_message) => {
-            error!("Failed to create basic shader pipeline: {}", error_message);
-            return ExitCode::FAILURE;
-        }
-        Ok(_) => {}
+        error!("Failed to create basic shader pipeline: {}", error_message);
+        return ExitCode::FAILURE;
     }
 
     let _ = event_loop.run(|event, _window_target, control_flow| {
@@ -57,7 +54,6 @@ fn main() -> ExitCode {
             Event::RedrawRequested(_id) => {
                 window.pre_present_notify();
                 renderer.render();
-                debug!("Redraw");
             }
             _ => {}
         }

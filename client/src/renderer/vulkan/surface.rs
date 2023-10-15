@@ -180,13 +180,12 @@ impl Surface {
                     .format(swapchain_parameters.surface_format.format)
                     .build();
 
-                let image_view = unsafe {
+                unsafe {
                     device
                         .logical_device
                         .create_image_view(&image_view_create_info, None)
                 }
-                .expect("Failed to create swapchain image view");
-                image_view
+                .expect("Failed to create swapchain image view")
             })
             .collect::<Vec<vk::ImageView>>();
 
@@ -271,10 +270,7 @@ impl Surface {
                         .image_available
                         .get(self.current_framebuffer_index)
                         .unwrap(),
-                    *self
-                        .frame_in_flight
-                        .get(self.current_framebuffer_index)
-                        .unwrap(),
+                    vk::Fence::null(),
                 )
         }
         .expect("Failed to acquire next image")
@@ -311,18 +307,14 @@ impl Surface {
             .image_indices(&[next_image])
             .build();
 
-        device.present_queue(
-            next_image as usize,
-            &self.swapchain_extension.as_ref().unwrap(),
-            &present_info,
-        );
+        device.present_queue(self.swapchain_extension.as_ref().unwrap(), &present_info);
 
         self.current_framebuffer_index =
             (self.current_framebuffer_index + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     pub fn get_current_frame_index(&self) -> usize {
-        return self.current_framebuffer_index;
+        self.current_framebuffer_index
     }
 }
 
@@ -444,14 +436,11 @@ fn get_swapchain_parameters(
         .formats
         .iter()
         .reduce(|accum, format| {
-            if format.format == preferred.0 && format.color_space == preferred.1 {
-                format
-            } else if format.format == vk::Format::B8G8R8A8_UNORM
-                && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-            {
-                format
-            } else if format.format == vk::Format::B8G8R8A8_SRGB
-                && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+            if (format.format == preferred.0 && format.color_space == preferred.1)
+                || (format.format == vk::Format::B8G8R8A8_UNORM
+                    && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR)
+                || (format.format == vk::Format::B8G8R8A8_SRGB
+                    && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR)
             {
                 format
             } else {
@@ -471,11 +460,12 @@ fn get_swapchain_parameters(
         .present_modes
         .iter()
         .reduce(|accum, mode| {
-            if *mode == preferred {
-                mode
-            } else if *mode == vk::PresentModeKHR::FIFO_RELAXED {
-                mode
-            } else if *mode == vk::PresentModeKHR::FIFO {
+            if (*mode == preferred)
+                || (*mode == vk::PresentModeKHR::FIFO_RELAXED && *accum != preferred)
+                || (*mode == vk::PresentModeKHR::FIFO
+                    && *accum != preferred
+                    && *accum != vk::PresentModeKHR::FIFO_RELAXED)
+            {
                 mode
             } else {
                 accum
