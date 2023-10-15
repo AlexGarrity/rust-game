@@ -45,7 +45,6 @@ fn main() -> ExitCode {
     }
 
     const TARGET_FRAME_TIME: Duration = Duration::new(0, 1000000000 / 60);
-
     let _ = event_loop.run(|event, _window_target, control_flow| {
         let start_time = SystemTime::now();
         control_flow.set_poll();
@@ -64,8 +63,9 @@ fn main() -> ExitCode {
         window.request_redraw();
 
         let current_time = SystemTime::now();
-        let elapsed_time = current_time.duration_since(start_time).unwrap();
-        std::thread::sleep(TARGET_FRAME_TIME - elapsed_time);
+        while let Ok(time_to_sleep) = current_time.duration_since(start_time) {
+            std::thread::sleep(time_to_sleep);
+        }
     });
 
     ExitCode::SUCCESS
