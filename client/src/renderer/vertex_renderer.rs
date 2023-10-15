@@ -58,7 +58,7 @@ impl VertexRenderer {
         }
     }
 
-    pub fn render(&mut self) {
+    pub fn render(&mut self, window: &winit::window::Window) {
         let next_image = {
             let device_guard = self.device.write();
             let mut device_lock = device_guard.unwrap();
@@ -72,6 +72,7 @@ impl VertexRenderer {
             next_frame_index
         };
 
+        window.request_redraw();
         self.surface.flip_buffers(next_image);
     }
 }

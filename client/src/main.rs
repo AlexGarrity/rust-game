@@ -1,6 +1,7 @@
 use crate::renderer::VertexRenderer;
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::{Duration, SystemTime};
 use tracing::{debug_span, error, info};
 use winit::event::{Event, WindowEvent};
 
@@ -43,7 +44,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    const TARGET_FRAME_TIME: Duration = Duration::new(0, 1000000000 / 60);
+
     let _ = event_loop.run(|event, _window_target, control_flow| {
+        let start_time = SystemTime::now();
         control_flow.set_poll();
         match event {
             Event::WindowEvent { event, .. } => {
@@ -52,11 +56,16 @@ fn main() -> ExitCode {
                 }
             }
             Event::RedrawRequested(_id) => {
-                window.pre_present_notify();
-                renderer.render();
+                renderer.render(&window);
             }
             _ => {}
         }
+
+        window.request_redraw();
+
+        let current_time = SystemTime::now();
+        let elapsed_time = current_time.duration_since(start_time).unwrap();
+        std::thread::sleep(TARGET_FRAME_TIME - elapsed_time);
     });
 
     ExitCode::SUCCESS
