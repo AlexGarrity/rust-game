@@ -64,7 +64,7 @@ fn main() -> ExitCode {
 
         let current_time = SystemTime::now();
         while let Ok(time_to_sleep) = current_time.duration_since(start_time) {
-            std::thread::sleep(time_to_sleep);
+            std::thread::sleep(time_to_sleep - TARGET_FRAME_TIME);
         }
     });
 
