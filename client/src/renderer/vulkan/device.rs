@@ -123,10 +123,10 @@ impl Device {
         queue_create_infos.push(graphics_queue_create_info);
         indices_used.insert(queue_family_indices.graphics.index);
 
+        let transfer_queue_priorities: Vec<f32> = (0..queue_family_indices.transfer.count)
+            .map(|_| 1.0)
+            .collect();
         if !indices_used.contains(&queue_family_indices.transfer.index) {
-            let transfer_queue_priorities: Vec<f32> = (0..queue_family_indices.transfer.count)
-                .map(|_| 1.0)
-                .collect();
             let transfer_queue_create_info = vk::DeviceQueueCreateInfo::builder()
                 .queue_family_index(queue_family_indices.transfer.index)
                 .queue_priorities(transfer_queue_priorities.as_slice())
@@ -135,10 +135,10 @@ impl Device {
             indices_used.insert(queue_family_indices.transfer.index);
         }
 
+        let compute_queue_priorities: Vec<f32> = (0..queue_family_indices.compute.count)
+            .map(|_| 1.0)
+            .collect();
         if !indices_used.contains(&queue_family_indices.compute.index) {
-            let compute_queue_priorities: Vec<f32> = (0..queue_family_indices.compute.count)
-                .map(|_| 1.0)
-                .collect();
             let compute_queue_create_info = vk::DeviceQueueCreateInfo::builder()
                 .queue_family_index(queue_family_indices.compute.index)
                 .queue_priorities(compute_queue_priorities.as_slice())
@@ -147,11 +147,12 @@ impl Device {
             indices_used.insert(queue_family_indices.compute.index);
         }
 
+        let present_queue_priority = [1.0];
         // We do present last, since we only make one queue
         if !indices_used.contains(&queue_family_indices.present.index) {
             let present_queue_create_info = vk::DeviceQueueCreateInfo::builder()
                 .queue_family_index(queue_family_indices.present.index)
-                .queue_priorities(&[1.0])
+                .queue_priorities(&present_queue_priority)
                 .build();
             queue_create_infos.push(present_queue_create_info);
             indices_used.insert(queue_family_indices.present.index);

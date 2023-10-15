@@ -36,8 +36,8 @@ fn main() -> ExitCode {
 
     let mut renderer = VertexRenderer::new("survival-game", (0, 1, 0), &window);
     if let Err(error_message) = renderer.load_shader(
-        Path::new("res/shaders/basic.vert.spv"),
-        Path::new("res/shaders/basic.frag.spv"),
+        Path::new("res/shaders/test_triangle.vert.spv"),
+        Path::new("res/shaders/test_triangle.frag.spv"),
         String::from("basic"),
     ) {
         error!("Failed to create basic shader pipeline: {}", error_message);
@@ -56,6 +56,7 @@ fn main() -> ExitCode {
             }
             Event::RedrawRequested(_id) => {
                 renderer.render(&window);
+                debug!("Redraw");
             }
             _ => {}
         }
@@ -64,6 +65,10 @@ fn main() -> ExitCode {
 
         let current_time = SystemTime::now();
         while let Ok(time_to_sleep) = current_time.duration_since(start_time) {
+            debug!(
+                "Sleeping for {} ms",
+                (TARGET_FRAME_TIME - time_to_sleep).as_millis()
+            );
             std::thread::sleep(TARGET_FRAME_TIME - time_to_sleep);
         }
     });
