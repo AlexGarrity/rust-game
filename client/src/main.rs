@@ -2,7 +2,7 @@ use crate::renderer::VertexRenderer;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime};
-use tracing::{debug_span, error, info};
+use tracing::{debug, debug_span, error, info};
 use winit::event::{Event, WindowEvent};
 
 mod renderer;
@@ -64,7 +64,7 @@ fn main() -> ExitCode {
 
         let current_time = SystemTime::now();
         while let Ok(time_to_sleep) = current_time.duration_since(start_time) {
-            std::thread::sleep(time_to_sleep - TARGET_FRAME_TIME);
+            std::thread::sleep(TARGET_FRAME_TIME - time_to_sleep);
         }
     });
 
